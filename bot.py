@@ -1,4 +1,4 @@
-"""UNDERGROUND — Telegram-бот (aiogram 3 + Webhook для Render без лимитов при старте)."""
+"""UNDERGROUND — Telegram-бот (aiogram 3 + Webhook для Render)."""
 import asyncio
 import html
 import json
@@ -115,7 +115,6 @@ async def cmd_rules(m: Message):
 
 @dp.message(Command("setimg"))
 async def cmd_setimg(m: Message):
-    """Привязать фото к событию: ответьте на фото командой /setimg night (или morning / lobby)."""
     parts = (m.text or "").split()
     if len(parts) < 2 or not m.reply_to_message or not m.reply_to_message.photo:
         return await m.answer("Ответьте на фото командой: <code>/setimg night</code> (или <code>morning</code>, <code>lobby</code>)")
@@ -369,9 +368,24 @@ def check_complete(g: Game) -> None:
         night_done[g.chat_id].set()
 
 
-# ---------- запуск на Render (Webhook) или локально (Polling) ----------
+# ---------- запуск ----------
 async def health(_request: web.Request) -> web.Response:
     return web.Response(text="UNDERGROUND bot is running", status=200)
+
+
+async def register_webhook(bot: Bot, webhook_url: str) -> None:
+    while True:
+        try:
+            await bot.set_webhook(webhook_url, drop_pending_updates=True)
+            log.info("✅ Webhook установлен: %s", webhook_url)
+            return
+        except TelegramRetryAfter as e:
+            wait_sec = int(e.retry_after) + 2
+            log.warning("Ждём снятия лимита Telegram: %s сек...", wait_sec)
+            await asyncio.sleep(wait_sec)
+        except Exception as e:
+            log.warning("Ошибка установки webhook (%s), повтор через 5 сек...", e)
+            await asyncio.sleep(5)
 
 
 async def main() -> None:
@@ -384,27 +398,20 @@ async def main() -> None:
         webhook_path = f"/webhook/{token.split(':')[0]}"
         webhook_url = f"{render_url}{webhook_path}"
 
-        async def on_startup() -> None:
-            for _ in range(5):
-                try:
-                    await bot.set_webhook(webhook_url, drop_pending_updates=True)
-                    log.info("✅ Webhook установлен: %s", webhook_url)
-                    break
-                except TelegramRetryAfter as e:
-                    await asyncio.sleep(int(e.retry_after) + 1)
-
-        dp.startup.register(on_startup)
-
         app = web.Application()
         app.router.add_get("/", health)
         app.router.add_get("/health", health)
         SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=webhook_path)
         setup_application(app, dp, bot=bot)
 
+        # Сначала мгновенно открываем порт для Render
         runner = web.AppRunner(app)
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", port).start()
         log.info("Сервер запущен на порту %s", port)
+
+        # Регистрацию webhook запускаем в фоне, не блокируя старт сервера
+        asyncio.create_task(register_webhook(bot, webhook_url))
         await asyncio.Event().wait()
     else:
         await bot.delete_webhook(drop_pending_updates=True)
