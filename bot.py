@@ -4,10 +4,16 @@ import html
 import logging
 import os
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatType
-from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+)
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
@@ -281,9 +287,28 @@ def check_complete(g: Game) -> None:
 
 
 async def main() -> None:
-    token = os.environ["BOT_TOKEN"]
+    token = os.environ["BOT_TOKEN"].strip()
+    port = int(os.getenv("PORT", "8000"))
+
+    app = web.Application()
+    app.router.add_get("/", lambda _: web.Response(text="OK"))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", port).start()
+
     bot = Bot(token, default=DefaultBotProperties(parse_mode="HTML"))
-    await dp.start_polling(bot)
+
+    while True:
+        try:
+            await dp.start_polling(bot, handle_signals=True)
+            break
+        except TelegramRetryAfter as e:
+            wait_sec = int(e.retry_after) + 2
+            logging.warning("Лимит Telegram при старте, ждём %s сек...", wait_sec)
+            await asyncio.sleep(wait_sec)
+        except (TelegramNetworkError, TelegramAPIError) as e:
+            logging.warning("Ошибка сети (%s), повтор через 5 сек...", e)
+            await asyncio.sleep(5)
 
 
 if __name__ == "__main__":
