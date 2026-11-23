@@ -381,14 +381,13 @@ async def main() -> None:
     port = int(os.getenv("PORT", "10000"))
 
     if render_url:
-        # На Render используем Webhook — никаких 34-секундных лимитов polling!
         webhook_path = f"/webhook/{token.split(':')[0]}"
         webhook_url = f"{render_url}{webhook_path}"
 
-        async def on_startup(b: Bot) -> None:
+        async def on_startup() -> None:
             for _ in range(5):
                 try:
-                    await b.set_webhook(webhook_url, drop_pending_updates=True)
+                    await bot.set_webhook(webhook_url, drop_pending_updates=True)
                     log.info("✅ Webhook установлен: %s", webhook_url)
                     break
                 except TelegramRetryAfter as e:
@@ -408,7 +407,6 @@ async def main() -> None:
         log.info("Сервер запущен на порту %s", port)
         await asyncio.Event().wait()
     else:
-        # Локальный запуск (polling)
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
 
